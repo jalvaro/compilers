@@ -1,0 +1,249 @@
+import java_cup.runtime.*;
+import java.io.*;
+import java.util.Hashtable;
+import java.util.Stack;
+
+parser code {:
+	static FileInputStream FInStr = null; // Input file
+	static String fileName;              // Input filename
+	static int numSyntaxErrors =0;
+	static int numLexErrors =0;
+	static Hashtable<String, simbol> mySymbolTable = new Hashtable<String, simbol>();
+
+	
+	public static void main (String argv[]) throws Exception {
+		parser Parser;
+
+		if (argv.length != 1) {
+			System.out.println("Usage: \tjava parser filename.ext");
+			return;	}
+		else {
+	   		fileName = argv[0];
+	   	try { 
+			FInStr = new FileInputStream(fileName);
+			} catch (FileNotFoundException e){
+				System.out.println ("Error: File " + fileName + " not found.");
+				return;  }	 
+		   Parser = new parser(new Yylex(FInStr));
+		   System.out.println ("\n\nParsing file "+fileName +"... ...");
+		   Parser.parse();
+		   
+		   //Report
+			System.out.println ("\nFile " + fileName + " processed!");
+			System.out.println ("\nLexical errors count: " + numLexErrors );
+			System.out.println ("\nSyntactical errors count: " + numSyntaxErrors );
+			System.out.println ("\nSymbol table content: \n" );
+			System.out.println ( "\t([IDENT]\t[SOURCE]\t[TYPE]\t[SCOPE])\n" );
+			System.out.println ( mySymbolTable.toString() );		   
+	   }
+	 }
+	  
+:};
+
+terminal 	CLASS, BEGIN, END, PUBLIC, PRIVATE, PROTECTED, FUNCTION ;
+terminal	BOOL, INTEGER, FLOAT, STRING, CHAR;
+terminal	BOOLVAL, UINTVAL, POSITIVEINTVAL, NEGATIVEINTVAL, UFLOATVAL, POSITIVEFLOATVAL, NEGATIVEFLOATVAL, STRINGVAL, CHARVAL;
+terminal	ASSIGN, ADD, INC, SUB, DEC, MULT, DIV, EXP, AND, OR, EQUALS, GT, LT, GE, LE, NOT, NOTEQUAL;
+terminal	COMMA, SEMICOLON, LPAR, RPAR;
+terminal	IF, ELSEIF, ELSE; 
+terminal 	DOT, FOR, THIS, READ, CONST, NEW, SUPER, WHILE, PRINT, RETURN;
+terminal 	String	ID;
+
+non terminal 			class_file;
+non terminal			attribute_list, attribute_def; 
+non terminal String 	visibility, type;
+non terminal			method_list, method_defs, method_def;
+non terminal Stack 		var_list, parameter_list, parameter_defs, argument_list, var_decl, var_defs, var_def;
+non terminal			type_def, instructions, instruction, instruction_list, expr, else_if;
+
+precedence left ADD, SUB, MULT, DIV, EXP, AND, OR, EQUALS, LT, GT, LE, GE, NOTEQUAL, NOT;
+
+class_file ::= CLASS ID
+			   BEGIN
+				attribute_list
+				method_list
+			   END
+			   |
+			   error 
+				{: parser.numSyntaxErrors++; 
+				System.out.println ("Syntax error at class file structure."); :}
+				;
+
+attribute_list ::= attribute_def
+			| attribute_def attribute_list;
+
+attribute_def ::= visibility:v type:t var_list:vl SEMICOLON
+				{: String ident;
+					while (!(vl.empty())) { 
+						ident = (String)vl.pop();
+						parser.mySymbolTable.put(ident, new simbol (ident, "Attribute", t, v));
+					}
+				:}
+				| type:t var_list:vl SEMICOLON
+				{: String ident;
+					while (!(vl.empty())) { 
+						ident = (String)vl.pop();
+						parser.mySymbolTable.put(ident, new simbol (ident, "Attribute", t, "Default"));
+					}
+				:}
+				;
+
+var_list ::= ID:i 
+				{: Stack s = new Stack();
+					s.push(i);
+					RESULT = s;
+				:}
+			|ID:i COMMA var_list:vl
+				{:
+					vl.push(i);
+					RESULT = vl;
+				:}
+			;
+			
+visibility ::=	PUBLIC 
+				{: RESULT = "Public"; :}
+				|PRIVATE
+				{: RESULT = "Private"; :}
+				|PROTECTED
+				{: RESULT = "Protected"; :};
+			
+type ::=	BOOL 
+			{: RESULT = "Bool"; :}
+			|INTEGER 
+			{: RESULT = "Integer"; :}
+			|FLOAT 
+			{: RESULT = "Float"; :}
+			|STRING 
+			{: RESULT = "String"; :}
+			|CHAR
+			{: RESULT = "Char"; :}
+			;
+
+method_list ::= | method_defs;
+
+method_defs ::= method_def
+			| method_def method_defs;
+
+method_def ::= FUNCTION type_def ID:m LPAR parameter_list:pl
+					{:  simbol ident;
+						while (!(pl.empty())) { 
+							ident = (simbol)pl.pop();
+							ident.setScope(m);
+							parser.mySymbolTable.put(m+"~"+ident.getIdent(), ident);
+						}
+					:} 
+			   RPAR
+			   BEGIN
+				var_decl:vl
+					{: 	simbol ident;
+						while (!(vl.empty())) { 
+							ident = (simbol)vl.pop();
+							ident.setScope(m);
+							parser.mySymbolTable.put(m+"~"+ident.getIdent(), ident);
+						}
+					:} 
+				instructions
+			   END
+			   |FUNCTION error 
+			   	{:parser.numSyntaxErrors++; 
+				System.out.println ("Syntax error at method definition.");
+			   	:};
+
+type_def ::= type|;
+
+parameter_list ::= {: RESULT = new Stack();:} | parameter_defs:pd 
+					{: RESULT=pd;:};
+
+parameter_defs ::= type:t ID:p
+				{:
+					Stack s = new Stack();
+					s.push(new simbol(p,"Parameter",t,"-"));
+					RESULT = s;
+				:}
+				| type:t ID:p COMMA parameter_defs:pl
+				{:
+					pl.push(new simbol(p,"Parameter",t,"-"));
+					RESULT = pl;
+				:}
+				|type error ID
+				{: parser.numSyntaxErrors++; 
+				System.out.println ("Syntax error at parameter list."); :}
+				;
+
+var_decl ::= {: RESULT=new Stack();:}| var_defs:vd
+				{: RESULT=vd;:}
+				;
+
+var_defs ::= var_def:vs 
+			{: RESULT=vs; :}
+			| var_def:vs var_defs:vd 
+			{:
+				while (!vs.empty()) {
+					vd.push(vs.pop());
+				}
+				RESULT=vd;
+			:};
+
+var_def ::= type:t var_list:vl SEMICOLON
+				{: 
+					Stack vars = new Stack();
+					String ident;
+					while (!vl.empty()) {
+						ident = (String)vl.pop();
+						vars.push(new simbol (ident, "Variable", t, "-"));
+					}
+					RESULT = vars;
+				:}
+			| type error SEMICOLON 
+				{: parser.numSyntaxErrors++; 
+				System.out.println ("Syntax error at method variables definition."); :};
+
+instructions ::= |instruction_list; 
+
+instruction_list ::= instruction
+				| instruction instruction_list;
+
+instruction ::= ID ASSIGN expr SEMICOLON
+				|ID error SEMICOLON
+				{: parser.numSyntaxErrors++; 
+				System.out.println ("Syntax error at ASSIGN sentence."); :}
+				|IF LPAR expr RPAR BEGIN instructions END else_if
+				|IF error {: parser.numSyntaxErrors++; 
+				System.out.println ("Syntax error at IF sentence."); :};
+
+else_if		::= ELSEIF LPAR expr RPAR BEGIN instructions END else_if
+				|ELSE BEGIN instructions END
+				|;
+
+expr 		::= ID
+				|ID LPAR argument_list RPAR
+				|BOOLVAL
+				|UINTVAL
+				|POSITIVEINTVAL
+				|NEGATIVEINTVAL
+				|UFLOATVAL
+				|POSITIVEFLOATVAL
+				|NEGATIVEFLOATVAL
+				|STRINGVAL
+				|CHARVAL
+				|expr ADD expr
+				|INC ID
+				|ID INC
+				|expr SUB expr
+				|DEC ID
+				|ID DEC
+				|expr MULT expr
+				|expr DIV expr
+				|expr EXP expr
+				|expr EQUALS expr
+				|expr GT expr
+				|expr LT expr
+				|expr GE expr
+				|expr LE expr
+				|expr AND expr
+				|expr OR expr
+				|NOT expr
+				|expr NOTEQUAL expr
+				|LPAR expr RPAR;
+
+argument_list ::= ID | ID COMMA argument_list;

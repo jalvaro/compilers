@@ -1,0 +1,240 @@
+// Fitxer CUP
+import java_cup.runtime.*;
+import java.io.*;
+import java.lang.String;
+import java.util.*;
+
+parser code {:
+  static FileInputStream FInStr = null;
+  public static String fInName; // fitxer entrada
+  static int nSyntaxErrors = 0; 
+  static int nLexErrors = 0;
+  static Hashtable<String, Simbol> mSymbolTable = new Hashtable<String,Simbol>();
+  static Simbol currentSimbol = new Simbol();
+
+  public static void main (String argv[]) throws Exception {
+    System.out.println("\n\n\n********************************* INICI *********************************\n");
+
+    parser analitzador; //Analitzador
+    if (argv.length<1) { 
+      System.out.println("Us:");
+      System.out.println("\tjava lexiClass filename.ext");
+    } else {
+      fInName = argv[0];
+      try {
+        FInStr = new FileInputStream(fInName); //Obre fitxer
+        System.out.println("Processant arxiu " + fInName + "...");
+      } catch (FileNotFoundException e) {
+        System.out.println (fInName + ": Impossible obrir fitxer!");
+        return;
+      }
+      analitzador = new parser(new lexiClass (FInStr));
+      System.out.println("S'inicia el parseig...");
+      analitzador.parse();
+      System.out.println("\nArxiu "+fInName+" processat.");
+
+      // Report
+      System.out.println("\nErrors lexics: " + nLexErrors);
+      System.out.println("\nErrors sintactics: " + nSyntaxErrors);
+      System.out.println("\nTaula de simbols: \n");
+      if (!mSymbolTable.isEmpty()) {
+        Enumeration<String> sims = mSymbolTable.keys();
+        while (sims.hasMoreElements()) {
+          System.out.println(mSymbolTable.get(sims.nextElement()).toString());
+        }
+      } else {
+          System.out.println("\tNo hi ha simbols");
+      }
+    System.out.println("\n\n\n********************************* FINAL *********************************");
+    }
+  } //Fi main
+:};
+
+// terminals i no terminals
+terminal                  CLASS, FUNCTION;
+terminal    Visibility    VISIBILITY;
+terminal    DataType      DATA_TYPE;
+terminal    String        IDENTIFIER;
+terminal                  IF, ELSEIF, ELSE;
+terminal                  L_BRACE, R_BRACE, L_PARENTHESIS, R_PARENTHESIS, SEMICOLON, COMMA, OPERATOR, UNARY_OPERATOR;
+terminal                  PRIMITIVE_VALUE;
+terminal                  EQUALS;
+non terminal              class, classDeclaration;
+non terminal              attributeList, attributeDef;
+non terminal              methodList, methodDef, constructorDeclaration, methodDeclaration, methodInstructions;
+non terminal              identifiers, identifierEnum, parameters, parameterEnum, variableList, variableDef;
+non terminal              instructionList, instructionDef;
+non terminal              expression, selfFormedExpr, methodCall;
+non terminal              operand;
+non terminal              ifElseExpression, ifExpr, elseifExpr, elseExpr;
+
+// precedencia
+precedence left OPERATOR, UNARY_OPERATOR;
+
+// gramatica
+class ::= classDeclaration L_BRACE attributeList methodList R_BRACE
+  | 
+    {:
+      System.out.println("Error: empty file or code not found."); 
+      parser.nSyntaxErrors++;
+    :} 
+  | error 
+    {:
+      System.out.println("Error: Code not recognizeable.");
+      parser.nSyntaxErrors++;
+    :}
+  ;
+classDeclaration ::= CLASS IDENTIFIER:e1
+    {: 
+      parser.currentSimbol.setMethod(e1);
+      parser.currentSimbol.setType(Type.CLASS);
+    :}
+  ;
+attributeList ::= attributeDef attributeList
+  |
+  ;
+attributeDef ::= VISIBILITY:e1 
+    {: parser.currentSimbol.setVisibility(e1); :}
+    variableDef
+  | {: parser.currentSimbol.setVisibility(Visibility.NONE); :}
+    variableDef
+  ;
+variableDef ::= DATA_TYPE:e1 
+    {: parser.currentSimbol.setDataType(e1); :}
+    identifierEnum SEMICOLON
+  | error SEMICOLON 
+    {:
+      System.out.println("Error: missing semicolon."); 
+      parser.nSyntaxErrors++;
+    :} 
+  ;
+identifiers ::= identifierEnum
+  |
+  ;
+identifierEnum ::= IDENTIFIER:e1
+    {:
+      // Si es una crida a la funcio: getFuncio(atribut1, atribut2)
+      // No tindra definit cap DataType i no els hem d'afegir a la llista de variables.
+      if (parser.currentSimbol.getDataType() != null) {
+        parser.currentSimbol.setLexeme(e1);
+        parser.mSymbolTable.put(e1, parser.currentSimbol);
+
+        // Creem un altre simbol a partir de l'anterior, pero sense lexema (estem en una enumeracio de variables,
+        // per tant, totes tindran els mateixos atributs exceptuant el nom)
+        parser.currentSimbol = new Simbol(parser.currentSimbol.getMethod(), parser.currentSimbol.getType(),
+            parser.currentSimbol.getVisibility(), parser.currentSimbol.getDataType());
+      }
+    :}
+    COMMA identifierEnum
+  | IDENTIFIER:e2
+    {:
+      // Si es una crida a la funcio: getFuncio(atribut1, atribut2)
+      // No tindra definit cap DataType i no els hem d'afegir a la llista de variables.
+      if (parser.currentSimbol.getDataType() != null) {
+        parser.currentSimbol.setLexeme(e2);
+        parser.mSymbolTable.put(e2, parser.currentSimbol);
+
+        // Creem un altre simbol i només mantenim el metode/classe on esta definit i el tipus de la
+        // variable (CLASS, VARIABLE, PARAMETER).
+        parser.currentSimbol = new Simbol(parser.currentSimbol.getMethod(), parser.currentSimbol.getType());
+      }
+    :}
+  ;
+parameters ::= 
+    {: 
+      // Assignem tipus PARAMETER
+      // Ni cap parametre ni cap variable d'un constructor poden tenir visibilitat (PUBLIC, PRIVATE, PROTECTED)
+      parser.currentSimbol.setType(Type.PARAMETER);
+      parser.currentSimbol.setVisibility(Visibility.NONE);
+    :}
+    parameterEnum
+  |
+  ;
+parameterEnum ::= DATA_TYPE:e1 IDENTIFIER:e2
+    {:
+      parser.currentSimbol.setDataType(e1);
+      parser.currentSimbol.setLexeme(e2);
+      parser.mSymbolTable.put(e2, parser.currentSimbol);
+
+      // Creem un altre simbol i  mantenim:
+      //  - el nom del metode/classe on esta definit
+      //  - el tipus de la variable (CLASS, VARIABLE, PARAMETER).
+      //  - la visibilitat
+      parser.currentSimbol = new Simbol(parser.currentSimbol.getMethod(), 
+            parser.currentSimbol.getType(), parser.currentSimbol.getVisibility());
+    :}
+    COMMA parameterEnum
+  | DATA_TYPE:e1 IDENTIFIER:e2
+    {:
+      parser.currentSimbol.setDataType(e1);
+      parser.currentSimbol.setLexeme(e2);
+      parser.mSymbolTable.put(e2, parser.currentSimbol);
+
+      // Creem un altre simbol i només mantenim el metode/classe on esta definit i el tipus de la
+      // variable (CLASS, VARIABLE, PARAMETER).
+      parser.currentSimbol = new Simbol(parser.currentSimbol.getMethod());
+    :}
+  ;
+variableList ::= 
+    {: 
+      // Assignem tipus VARIABLE
+      // Ni cap parametre ni cap variable d'un constructor poden tenir visibilitat (PUBLIC, PRIVATE, PROTECTED)
+      parser.currentSimbol.setType(Type.VARIABLE);
+      parser.currentSimbol.setVisibility(Visibility.NONE);
+    :}
+    variableDef variableList
+  |
+  ;
+methodList ::= methodDef methodList
+  |
+  ;
+methodDef ::= constructorDeclaration methodInstructions
+  | methodDeclaration methodInstructions
+  ;
+constructorDeclaration ::= FUNCTION IDENTIFIER:e1
+    {: 
+      parser.currentSimbol.setMethod(e1);
+
+      if (!e1.equals(parser.currentSimbol.getMethod())) {
+        parser.nSyntaxErrors++;
+        System.out.println("Error!. Constructor name doesn't match with " +
+          "the class name: " + parser.currentSimbol.getMethod());
+      }
+    :}
+  ;
+methodDeclaration ::= FUNCTION DATA_TYPE IDENTIFIER:e1
+    {: parser.currentSimbol.setMethod(e1); :}
+  ;
+methodInstructions ::= L_PARENTHESIS parameters R_PARENTHESIS L_BRACE variableList instructionList R_BRACE
+  ;
+instructionList ::= instructionDef instructionList
+  |
+  ;
+instructionDef ::= IDENTIFIER EQUALS expression SEMICOLON
+  | ifElseExpression
+  ;
+expression ::= selfFormedExpr OPERATOR expression
+  | selfFormedExpr
+  ;
+
+selfFormedExpr ::= L_PARENTHESIS expression R_PARENTHESIS
+  | UNARY_OPERATOR selfFormedExpr
+  | methodCall
+  | operand
+  ;
+operand ::= PRIMITIVE_VALUE
+  | IDENTIFIER
+  ;
+methodCall ::= IDENTIFIER L_PARENTHESIS identifiers R_PARENTHESIS
+  ;
+ifElseExpression ::= ifExpr
+  | ifExpr elseifExpr
+  | ifExpr elseifExpr elseExpr
+  | ifExpr elseExpr
+  ;
+ifExpr ::= IF L_PARENTHESIS expression R_PARENTHESIS L_BRACE instructionList R_BRACE
+  ;
+elseifExpr ::= ELSEIF L_PARENTHESIS expression R_PARENTHESIS L_BRACE instructionList R_BRACE
+  ;
+elseExpr ::= ELSE L_BRACE instructionList R_BRACE
+  ;

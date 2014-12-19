@@ -1,0 +1,37 @@
+Suposicions:
+	- Un atribut no pot estar repetit (el nom).
+	- Un paràmetre no pot estar repetit (el nom).
+	- Una variable no pot estar repetida (el nom).
+	- Dintre d'un mètode:
+		- Un paràmetre o variable locals poden crear-se amb el nom d'un atribut.
+		- Si es fa ús d'aquest nou paràmetre o variable, el tipus serà el del paràmetre o variable definits al mètode. No s'aplicarà les propietats de l'atribut.
+		- Una variable no pot utilitzar el nom d'un paràmetre.
+	- Entre mètodes:
+		- Les variables i paràmetres només tenen sentit dintre de l'abast del mètode, per tant, diferents mètodes poden crear variables o paràmetres amb noms ja utilitzats en altres mètodes. Són totalment independents.
+	- Un mètode pot aparéixer definit vàries vegades amb el mateix nom, però ha de tenir paràmetres diferents per tal que no s'emeti un error semàntic.
+
+
+- He modificat definició de String --> compilador lèxic.
+- He assignat la següent notació per a diferenciar els mètodes:
+	[nom_metode] + "~" + [num]
+
+	on:
+	- nom_metode és el nom que se li assigna.
+	- num determina les vegades que ha aparegut definit
+
+	un exemple seria:
+
+		function getA() {}
+		function getA(int a) {}
+		function getA(int a) {}
+
+	es guardaria com a:
+		getA~0
+		getA~1
+		getA~2	-->	Aquest emetrà un error semàntic per duplicació del getA~1.
+
+	- INC, DEC, SUB, MULT, DIV, EXP: No aplica a "String", "Bool".
+	- ADD: No aplica a "Bool".
+	- EQUALS, NOTEQUAL: Només aplica a variables del mateix tipus. Retorna sempre un "Bool".
+	- GT, LT, GE, LE: No aplica a "Bool". Retorna sempre un "Bool".
+	- AND, OR, NOT: Només aplica a "Bool".
