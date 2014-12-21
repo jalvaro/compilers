@@ -2,13 +2,18 @@ import java_cup.runtime.*;
 import java.io.*;
 import java.util.Hashtable;
 import java.util.Stack;
+import java.util.List;
+import java.util.ArrayList;
 
 parser code {:
 	static FileInputStream FInStr = null; // Input file
 	static String fileName;              // Input filename
+	static int numSemanticErrors =0;
 	static int numSyntaxErrors =0;
 	static int numLexErrors =0;
 	static Hashtable<String, simbol> mySymbolTable = new Hashtable<String, simbol>();
+	static MyMethodTable myMethodTable = new MyMethodTable();
+	static Method currentMethod = null;
 
 	
 	public static void main (String argv[]) throws Exception {
@@ -30,13 +35,45 @@ parser code {:
 		   
 		   //Report
 			System.out.println ("\nFile " + fileName + " processed!");
-			System.out.println ("\nLexical errors count: " + numLexErrors );
-			System.out.println ("\nSyntactical errors count: " + numSyntaxErrors );
+			System.out.println ("\tLexical errors count: " + numLexErrors );
+			System.out.println ("\tSyntactic errors count: " + numSyntaxErrors );
+			System.out.println ("\tSemantic errors count: " + numSemanticErrors );
 			System.out.println ("\nSymbol table content: \n" );
-			System.out.println ( "\t([IDENT]\t[SOURCE]\t[TYPE]\t[SCOPE])\n" );
-			System.out.println ( mySymbolTable.toString() );		   
+			System.out.println ( "\t\t([IDENT]\t[SOURCE]\t\t[TYPE]\t\t[SCOPE])\n" );
+			System.out.println ( mySymbolTable.toString() );
 	   }
 	 }
+
+	// Donat un id d'una variable, retorna el símbol que aplica a aquest id tenint en compte el scope
+	// en el que està. Si aquest id està definit al scope de la classe (atribut) i al scope del mètode
+	// actual (paràmetre o variable), es retornarà el símbol que s'ha definit en el scope del mètode.
+	public static simbol getGenericVar(String id) {
+		simbol sParam = currentMethod.getParameter(id);
+		simbol sVar = currentMethod.getVariable(id);
+		simbol sAttr = mySymbolTable.get(id);
+
+		if (sParam != null) {
+			return sParam;
+		} else if (sVar != null) {
+			return sVar;
+		} else if (sAttr != null) {
+			return sAttr;
+		}
+
+		return null;
+	}
+
+	// Retorna el tipus del símbol obtingut amb el mètode getGenericVar()
+	public static String getTypeOfGenericVar(String id) {
+		String it = null;
+
+		simbol s = getGenericVar(id);
+		if (s != null) {
+			it = s.getType();
+		}
+
+		return it;
+	}
 	  
 :};
 
@@ -51,10 +88,10 @@ terminal 	String	ID;
 
 non terminal 			class_file;
 non terminal			attribute_list, attribute_def; 
-non terminal String 	visibility, type;
+non terminal String 	visibility, type, type_def, expr;
 non terminal			method_list, method_defs, method_def;
 non terminal Stack 		var_list, parameter_list, parameter_defs, argument_list, var_decl, var_defs, var_def;
-non terminal			type_def, instructions, instruction, instruction_list, expr, else_if;
+non terminal			instructions, instruction, instruction_list, else_if; 
 
 precedence left ADD, SUB, MULT, DIV, EXP, AND, OR, EQUALS, LT, GT, LE, GE, NOTEQUAL, NOT;
 
@@ -66,7 +103,7 @@ class_file ::= CLASS ID
 			   |
 			   error 
 				{: parser.numSyntaxErrors++; 
-				System.out.println ("Syntax error at class file structure."); :}
+				System.out.println ("\nERROR - Syntactic: Syntax error at class file structure."); :}
 				;
 
 attribute_list ::= attribute_def
@@ -76,14 +113,28 @@ attribute_def ::= visibility:v type:t var_list:vl SEMICOLON
 				{: String ident;
 					while (!(vl.empty())) { 
 						ident = (String)vl.pop();
-						parser.mySymbolTable.put(ident, new simbol (ident, "Attribute", t, v));
+
+						if (!parser.mySymbolTable.containsKey(ident)) {
+							parser.mySymbolTable.put(ident, new simbol (ident, "Attribute", t, v));
+						} else {
+							parser.numSemanticErrors ++;
+							System.out.println("\nERROR - Semantic: Duplicated simbol detected:\n" + 
+								parser.mySymbolTable.get(ident).reportCompareTo(new simbol(ident, "Attribute", t, v)) );
+						}
 					}
 				:}
 				| type:t var_list:vl SEMICOLON
 				{: String ident;
 					while (!(vl.empty())) { 
 						ident = (String)vl.pop();
-						parser.mySymbolTable.put(ident, new simbol (ident, "Attribute", t, "Default"));
+
+						if (!parser.mySymbolTable.containsKey(ident)) {
+							parser.mySymbolTable.put(ident, new simbol (ident, "Attribute", t, "Default"));
+						} else {
+							parser.numSemanticErrors++;
+							System.out.println("\nERROR - Semantic: Duplicated simbol detected:\n" + 
+								parser.mySymbolTable.get(ident).reportCompareTo(new simbol(ident, "Attribute", t, "Default")) );
+						}
 					}
 				:}
 				;
@@ -124,32 +175,96 @@ method_list ::= | method_defs;
 method_defs ::= method_def
 			| method_def method_defs;
 
-method_def ::= FUNCTION type_def ID:m LPAR parameter_list:pl
+method_def ::= FUNCTION type_def:t ID:m LPAR parameter_list:pl
 					{:  simbol ident;
-						while (!(pl.empty())) { 
-							ident = (simbol)pl.pop();
-							ident.setScope(m);
-							parser.mySymbolTable.put(m+"~"+ident.getIdent(), ident);
+
+						// Per tal de poder diferenciar les variables de dos mètodes amb el mateix nom però
+						// amb paràmetres diferents (overloading o sobrecàrrega), s'agefeix un sufix ~0, ~1...
+						// per a poder mantenir un registre del mètode. Per exemple:
+						// 		- Mètodes: setVal(int a), setVal(float b)
+						//		- S'identificaran com a: setVal~0, setVal~1 respectivament.
+						int k = 0;
+						String identMethod = m+"~"+k; 
+
+						while(parser.myMethodTable.containsKey(identMethod)) {
+							k++;
+							identMethod = m+"~"+k;
+						}
+
+						// A l'objecte Method hi guardem tant el "id" original del mètode com el que em generat
+						// per a diferenciar mètodes sobrecarregats.
+						// Seguint l'exemple anterior, les variables m i identMethod prendrien els valors següents:
+						// 		- m = "setVal", identMethod = "setVal~0", per al mètode setVal(int a)
+						// 		- m = "setVal", identMethod = "setVal~1", per al mètode setVal(float b)
+						Method method = new Method(m, identMethod, t, pl);		
+						parser.currentMethod = method;	
+						String identParam;	
+
+						// S'afegeixen els paràmetres al mètode
+						for (int i=0; i<pl.size(); i++) {
+							ident = (simbol)pl.get(i);
+							ident.setScope(identMethod);
+							identParam = identMethod + "~" + ident.getIdent();
+
+							if (!parser.mySymbolTable.containsKey(identParam)) {
+								parser.mySymbolTable.put(identParam, ident);
+							} else {
+								parser.numSemanticErrors++;
+								System.out.println("\nERROR - Semantic: Duplicated simbol detected:\n" + 
+									parser.mySymbolTable.get(identParam).reportCompareTo(ident) );
+							}
+						}
+
+						// Un cop ja tenim l'objecte mètode ben format, comprovem que no estigui duplicat i l'afegim a la
+						// taula dels mètodes. Si està duplicat mostrem un error semàntic.
+						List<Method> otherMethods = parser.myMethodTable.getMethods(m);
+						boolean isMethodDuplicated = false;
+
+						if (otherMethods != null) {
+							for (Method otherMethod : otherMethods) {
+								if (otherMethod.equals(method)) {
+									parser.numSemanticErrors++;
+									isMethodDuplicated = true;
+									System.out.println("\nERROR - Semantic: Duplicated method detected:\n" + 
+										otherMethod.reportCompareTo(method) );
+									break;
+								}
+							}
+							parser.myMethodTable.put(identMethod, method);
 						}
 					:} 
 			   RPAR
 			   BEGIN
 				var_decl:vl
 					{: 	simbol ident;
+						String identParam;
+						String identMethod = parser.currentMethod.getIdent(); 
+
+						// S'afegeixen les variables definides en el scope del mètode a l'objecte mètode
 						while (!(vl.empty())) { 
 							ident = (simbol)vl.pop();
-							ident.setScope(m);
-							parser.mySymbolTable.put(m+"~"+ident.getIdent(), ident);
+							ident.setScope(identMethod);
+							identParam = identMethod + "~" + ident.getIdent();
+
+							if (!parser.mySymbolTable.containsKey(identParam)) {
+								parser.currentMethod.addVariable(ident);
+								parser.mySymbolTable.put(identParam, ident);
+							} else {
+								parser.numSemanticErrors++;
+								System.out.println("\nERROR - Semantic: Duplicated simbol detected:\n" + 
+									parser.mySymbolTable.get(identParam).reportCompareTo(ident) );
+							}
 						}
 					:} 
 				instructions
 			   END
 			   |FUNCTION error 
 			   	{:parser.numSyntaxErrors++; 
-				System.out.println ("Syntax error at method definition.");
+				System.out.println ("\nERROR - Syntactic: Syntax error at method definition.");
 			   	:};
 
-type_def ::= type|;
+type_def ::= type:t {: RESULT = t; :}
+			| {: RESULT = ""; :};
 
 parameter_list ::= {: RESULT = new Stack();:} | parameter_defs:pd 
 					{: RESULT=pd;:};
@@ -167,7 +282,7 @@ parameter_defs ::= type:t ID:p
 				:}
 				|type error ID
 				{: parser.numSyntaxErrors++; 
-				System.out.println ("Syntax error at parameter list."); :}
+				System.out.println ("\nERROR - Syntactic: Syntax error at parameter list."); :}
 				;
 
 var_decl ::= {: RESULT=new Stack();:}| var_defs:vd
@@ -196,54 +311,288 @@ var_def ::= type:t var_list:vl SEMICOLON
 				:}
 			| type error SEMICOLON 
 				{: parser.numSyntaxErrors++; 
-				System.out.println ("Syntax error at method variables definition."); :};
+				System.out.println ("\nERROR - Syntactic: Syntax error at method variables definition."); :};
 
 instructions ::= |instruction_list; 
 
 instruction_list ::= instruction
 				| instruction instruction_list;
 
-instruction ::= ID ASSIGN expr SEMICOLON
+instruction ::= ID:i ASSIGN expr:et SEMICOLON
+				{: 
+					String it = parser.getTypeOfGenericVar(i);
+
+					if (it == null) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+					} else if (!it.equals(et)) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Assign - Types not equal in method: " + parser.currentMethod.getIdent() + ", for variable: " + i + ":\t\t Expected " + it + ", got " + et);
+					}
+				:}
 				|ID error SEMICOLON
 				{: parser.numSyntaxErrors++; 
-				System.out.println ("Syntax error at ASSIGN sentence."); :}
-				|IF LPAR expr RPAR BEGIN instructions END else_if
-				|IF error {: parser.numSyntaxErrors++; 
-				System.out.println ("Syntax error at IF sentence."); :};
+				System.out.println ("\nERROR - Syntactic: Syntax error at ASSIGN sentence."); :}
+				|IF LPAR expr:et RPAR 
+				{: 
+					String it = "Bool";
 
-else_if		::= ELSEIF LPAR expr RPAR BEGIN instructions END else_if
+					if (!it.equals(et)) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: If - Types not equal in method: " + parser.currentMethod.getIdent() + ":\t\t Expected " + it + ", got " + et);
+					}
+				:}
+				BEGIN instructions END else_if
+				|IF error {: parser.numSyntaxErrors++; 
+				System.out.println ("\nERROR - Syntactic: Syntax error at IF sentence."); :};
+
+else_if		::= ELSEIF LPAR expr:et RPAR 
+				{: 
+					String it = "Bool";
+
+					if (!it.equals(et)) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: If Else - Types not equal in method: " + parser.currentMethod.getIdent() + ":\t\t Expected " + it + ", got " + et);
+					}
+				:}
+				BEGIN instructions END else_if
 				|ELSE BEGIN instructions END
 				|;
 
-expr 		::= ID
-				|ID LPAR argument_list RPAR
-				|BOOLVAL
-				|UINTVAL
-				|POSITIVEINTVAL
-				|NEGATIVEINTVAL
-				|UFLOATVAL
-				|POSITIVEFLOATVAL
-				|NEGATIVEFLOATVAL
-				|STRINGVAL
-				|CHARVAL
-				|expr ADD expr
-				|INC ID
-				|ID INC
-				|expr SUB expr
-				|DEC ID
-				|ID DEC
-				|expr MULT expr
-				|expr DIV expr
-				|expr EXP expr
-				|expr EQUALS expr
-				|expr GT expr
-				|expr LT expr
-				|expr GE expr
-				|expr LE expr
-				|expr AND expr
-				|expr OR expr
-				|NOT expr
-				|expr NOTEQUAL expr
-				|LPAR expr RPAR;
+expr 		::= ID:i
+				{: 
+					String it = parser.getTypeOfGenericVar(i);
 
-argument_list ::= ID | ID COMMA argument_list;
+					if (it == null) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						RESULT = "NOT_MATCH";
+					} else {
+						RESULT = it;
+					}
+				:}
+				|ID:m LPAR argument_list:al RPAR
+				{: 
+					List<Method> storedMethods = parser.myMethodTable.getMethods(m);
+					Method callMethod = new Method(m, al);
+					String retVal = "NOT_MATCH";
+					String ident = "NOT_MATCH";
+
+					for (Method storedMethod : storedMethods) {
+						if (callMethod.equals(storedMethod)) {
+							retVal = storedMethod.getRetVal();
+							ident = storedMethod.getIdent();
+							break;
+						}
+					}
+					RESULT = retVal;
+				:}
+				|BOOLVAL
+				{: RESULT = "Bool"; :}
+				|UINTVAL
+				{: RESULT = "Integer"; :}
+				|POSITIVEINTVAL
+				{: RESULT = "Integer"; :}
+				|NEGATIVEINTVAL
+				{: RESULT = "Integer"; :}
+				|UFLOATVAL
+				{: RESULT = "Float"; :}
+				|POSITIVEFLOATVAL
+				{: RESULT = "Float"; :}
+				|NEGATIVEFLOATVAL
+				{: RESULT = "Float"; :}
+				|STRINGVAL
+				{: RESULT = "String"; :}
+				|CHARVAL
+				{: RESULT = "Char"; :}
+				|expr:e1 ADD expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|INC ID:i
+				{: 
+					String it = parser.getTypeOfGenericVar(i);
+
+					if (it == null || it.equals("String") || it.equals("Bool")) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						RESULT = "NOT_MATCH";
+					} else {
+						RESULT = it;
+					}
+				:}
+				|ID:i INC
+				{: 
+					String it = parser.getTypeOfGenericVar(i);
+
+					if (it == null || it.equals("String") || it.equals("Bool")) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						RESULT = "NOT_MATCH";
+					} else {
+						RESULT = it;
+					}
+				:}
+				|expr:e1 SUB expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool") && !e1.equals("String")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|DEC ID:i
+				{: 
+					String it = parser.getTypeOfGenericVar(i);
+
+					if (it == null || it.equals("String") || it.equals("Bool")) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						RESULT = "NOT_MATCH";
+					} else {
+						RESULT = it;
+					}
+				:}
+				|ID:i DEC
+				{: 
+					String it = parser.getTypeOfGenericVar(i);
+
+					if (it == null || it.equals("String") || it.equals("Bool")) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						RESULT = "NOT_MATCH";
+					} else {
+						RESULT = it;
+					}
+				:}
+				|expr:e1 MULT expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool") && !e1.equals("String")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 DIV expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool") && !e1.equals("String")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 EXP expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool") && !e1.equals("String")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 EQUALS expr:e2
+				{: 
+					if (e1.equals(e2)) {
+						RESULT = "Bool";
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 GT expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool")) {
+						RESULT = "Bool";
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 LT expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool")) {
+						RESULT = "Bool";
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 GE expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool")) {
+						RESULT = "Bool";
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 LE expr:e2
+				{: 
+					if (e1.equals(e2) && !e1.equals("Bool")) {
+						RESULT = "Bool";
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 AND expr:e2
+				{: 
+					if (e1.equals(e2) && e1.equals("Bool")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 OR expr:e2
+				{: 
+					if (e1.equals(e2) && e1.equals("Bool")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|NOT expr:e1
+				{: 
+					if (e1.equals("Bool")) {
+						RESULT = e1;
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|expr:e1 NOTEQUAL expr:e2
+				{: 
+					if (e1.equals(e2)) {
+						RESULT = "Bool";
+					} else {
+						RESULT = "NOT_MATCH";
+					}
+				:}
+				|LPAR expr:e1 RPAR {: RESULT = e1; :}
+				;
+
+argument_list ::= {: RESULT = new Stack();:}
+				|
+				ID:i
+				{:
+					Stack al = new Stack();
+					simbol sbl = parser.getGenericVar(i);
+
+					if (sbl == null) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						sbl = new simbol(i, "NOT_MATCH");
+					}
+					al.push(sbl);
+					RESULT = al;
+				:}
+				| ID:i COMMA argument_list:al
+				{:
+					simbol sbl = parser.getGenericVar(i);
+
+					if (sbl == null) {
+						parser.numSemanticErrors++;
+						System.out.println("\nERROR - Semantic: Variable not defined or cannot be used in this scope:\t\t" + i);
+						sbl = new simbol(i, "NOT_MATCH");
+					}
+					al.push(sbl);
+					RESULT = al;
+				:}
+				;

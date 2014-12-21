@@ -1,11 +1,26 @@
 import java_cup.runtime.Symbol;
+import java.util.Stack;
+import java.util.Hashtable;
+import java.util.List;
+import java.util.ArrayList;
 
+/**
+* Classe simbol. Guarda la informació relacionada amb un símbol:
+*   - ident: nom del símbol
+*   - source: "Atribut", "Paràmetre" o "Variable".
+*   - type: tipus del símbol.
+*   - scope: nom del mètode en el que s'ha definit o "Default" si és a nivell de classe.
+*/
 class simbol {
     private String ident;
     private String source;
     private String type;
     private String scope;
     
+    public simbol (String i, String t)
+    {
+      this(i, "", t, "");
+    }
     public simbol (String i, String s, String t, String v)
     {
       this.ident = new String (i);
@@ -16,14 +31,179 @@ class simbol {
     public String getIdent() {
       return this.ident;
     }
+    public String getType() {
+      return this.type;
+    }
     public void setScope( String v) {
       this.scope = new String (v);
     }
     public String toString()
     {
-      return new String ( "\t([" + this.ident + "]\t[" + this.source 
-                  + "]\t[" + this.type + "]\t[" + this.scope + "])\n" );
+      StringBuilder sBuilder = new StringBuilder();
+      sBuilder.append( "\t([" + this.ident + "]" );
+      if (this.ident.length() < 5) {
+        sBuilder.append( "\t" );
+      }
+      sBuilder.append( "\t[" + this.source + "]" );
+      sBuilder.append( "\t\t[" + this.type + "]" );
+      if (this.type.length() < 6) {
+        sBuilder.append( "\t" );
+      }
+      sBuilder.append( "\t[" + this.scope + "])\n" );
+
+      return sBuilder.toString();
     }
+    public String reportCompareTo (simbol s) {
+      StringBuilder sBuilder = new StringBuilder();
+      return new String("\n\tIdent   :\t" + this.ident +"\t\t" + s.ident +
+        "\n\tSource  :\t" + this.source +"\t" + s.source +
+        "\n\tType    :\t" + this.type +"\t\t" + s.type +
+        "\n\tScope   :\t" + this.scope +"\t\t" + s.scope );
+    }
+}
+
+/**
+* Classe Method. Guarda la informació relacionada amb un mètode:
+*   - id: nom del mètode. Per exemple: setVal
+*   - ident: nom generat del mètode. Per exemple, setVal~0. S'ha decidit aquesta nomenclatura per poder guardar
+*         mètodes sobrecarregats i mètodes duplicats. El sufix ~[k] és incremental, i pels següents mètodes amb el
+*         mateix nom serien: setVal~1, setVal~2...
+*   - retVal: valor de retorn del mètode.
+*   - parameters: llista de símbols amb els paràmetres del mètode.
+*   - variables: llista de símbols amb les variables del mètode.
+*/
+class Method {
+  private String id;
+  private String ident;
+  private String retVal;
+  private Stack<simbol> parameters;
+  private Stack<simbol> variables;
+
+  public Method (String id, Stack<simbol> parameters) {
+    this(id, "", "", parameters);
+  }
+
+  public Method (String id, String ident, String retVal) {
+    this(id, ident, retVal, new Stack<simbol>());
+  }
+
+  public Method (String id, String ident, String retVal, Stack<simbol> parameters) {
+    this(id, ident, retVal, parameters, new Stack<simbol>());
+  }
+
+  public Method (String id, String ident, String retVal, Stack<simbol> parameters, Stack<simbol> variables) {
+    this.id = id;
+    this.ident = ident;
+    this.retVal = retVal;
+    this.parameters = parameters;
+    this.variables = variables;
+  }
+
+  public void addVariable(simbol var) {
+    variables.push(var);
+  }
+
+  public String getId() {
+    return id;
+  }
+
+  public String getIdent() {
+    return ident;
+  }
+
+  public String getRetVal() {
+    return retVal;
+  }
+
+  public simbol getParameter(String id) {
+    simbol s;
+    for (int i=0; i<parameters.size(); i++) {
+      s = parameters.get(i);
+      if (s.getIdent().equals(id)) {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  public simbol getVariable(String id) {
+    simbol s;
+    for (int i=0; i<variables.size(); i++) {
+      s = variables.get(i);
+      if (s.getIdent().equals(id)) {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  public simbol getSimbol(String id) {
+    simbol s = getParameter(id);
+    if (s == null) {
+      s = getVariable(id);
+    }
+
+    return s;
+  }
+
+  // Mètode equals sobreescrit. Dos mètodes seran iguals si:
+  //  - No són null.
+  //  - Són instància de la classe Method.
+  //  - Tenen el mateix id.
+  //  - Tenen el mateix número de paràmetres.
+  //  - Les llistes de paràmetres tenen el mateix tipus de forma ordenada.
+  public boolean equals(Object o){
+    if(o == null)                return false;
+    if(!(o instanceof Method)) return false;
+
+    Method other = (Method) o;
+    if(!this.id.equals(other.id))      return false;
+    if(this.parameters.size() != other.parameters.size())   return false;
+
+    String thisSimbolType, otherSimbolType;
+    for (int i=0; i<this.parameters.size(); i++) {
+      thisSimbolType = this.parameters.get(i).getType();
+      otherSimbolType = other.parameters.get(i).getType();
+      if(! thisSimbolType.equals(otherSimbolType)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  public String reportCompareTo (Method m) {
+    StringBuilder sBuilder = new StringBuilder();
+
+    sBuilder.append("\n\tMethod name   :\t" + this.id +"\t" + m.id + "\n");
+    sBuilder.append("\n\tReturn value   :\t" + this.retVal +"\t" + m.retVal + "\n");
+
+    for (int i=0; i<this.parameters.size(); i++) {
+      sBuilder.append("\n\t***** Parameter " + i + " *****");
+      sBuilder.append(this.parameters.get(i).reportCompareTo(m.parameters.get(i)));
+      sBuilder.append("\n");
+    }
+
+    return sBuilder.toString();
+  }
+}
+
+// Classe que guarda la taula dels mètodes.
+class MyMethodTable extends Hashtable<String, Method> {
+  private static final long serialVersionUID = 6378269766840508928L;
+
+  public List<Method> getMethods(String id) {
+    List<Method> methods = new ArrayList<Method>();
+    int k = 0;
+    String ident = id + "~" + k;
+
+    while(get(ident) != null) {
+      methods.add(get(ident));
+      k++;
+      ident = id + "~" + k;
+    }
+    return methods;
+  }
 }
 
 %%
@@ -39,7 +219,7 @@ class simbol {
 "//"[^\n]*\n  {/* COMMENT */}
 "#"[^\n]*\n  {/* COMMENT */} 
 /\*[^]*\*/  {/* COMMENT */}                           
-\"[^]*\"                {return new Symbol(sym.STRINGVAL);}
+\"[^\"]*\"                {return new Symbol(sym.STRINGVAL);} 
 "'"[a-zA-Z0-9]"'"       {return new Symbol(sym.CHARVAL);} 
 class                   {return new Symbol(sym.CLASS);}
 function                {return new Symbol(sym.FUNCTION);}
@@ -96,22 +276,22 @@ true|false              {return new Symbol(sym.BOOLVAL);}
 "-"[0-9]+\.[0-9]+       {return new Symbol(sym.NEGATIVEFLOATVAL);}
 [a-zA-Z_][a-zA-Z_0-9]*  {return new Symbol(sym.ID,new String(yytext()));}
 [-+]?[0-9]+\.[^0-9]     {
-                              System.out.println("\nLexical error: Unexpected input at "+(yyline+1)+": "+yytext());
+                              System.out.println("\nERROR - Lexical: Unexpected input at "+(yyline+1)+": "+yytext());
                               parser.numLexErrors++;
                         }
 [-+]?[^0-9]\.[0-9]+     {
-                              System.out.println("\nLexical error: Unexpected input at "+(yyline+1)+": "+yytext());
+                              System.out.println("\nERROR - Lexical: Unexpected input at "+(yyline+1)+": "+yytext());
                               parser.numLexErrors++;
                         }                               
 [-+]?\.[0-9]+           {
-                              System.out.println("\nLexical error: Unexpected input at "+(yyline+1)+": "+yytext());
+                              System.out.println("\nERROR - Lexical: Unexpected input at "+(yyline+1)+": "+yytext());
                               parser.numLexErrors++;
                         }
 [-+]?[0-9]+\.           {
-                              System.out.println("\nLexical error: Unexpected input at "+(yyline+1)+": "+yytext());
+                              System.out.println("\nERROR - Lexical: Unexpected input at "+(yyline+1)+": "+yytext());
                               parser.numLexErrors++;
                         }                   
 .                       {
-                              System.out.println("\nLexical error: Unexpected input at "+(yyline+1)+": "+yytext());
+                              System.out.println("\nERROR - Lexical: Unexpected input at "+(yyline+1)+": "+yytext());
                               parser.numLexErrors++;
                         }
